@@ -6,6 +6,7 @@ import itertools
 import time
 import torch
 import torch.distributed as dist
+import os
 
 import communication
 import runtime_utilities
@@ -178,7 +179,7 @@ class StageRuntime:
             # determine the "producing" and "consuming" module IDs of each
             # tensor. We then use the corresponding machine ranks to send
             # and receive tensors.
-            master_port = 12345
+            master_port = os.environ.get('TASK_MASTER_PORT', 12345)
             self.comm_handler = communication.CommunicationHandler(
                 master_addr=master_addr,
                 master_port=master_port,
