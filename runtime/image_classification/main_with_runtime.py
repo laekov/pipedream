@@ -92,9 +92,12 @@ parser.add_argument('--recompute', action='store_true',
 # by not applying updates every minibatch.
 parser.add_argument('--macrobatch', action='store_true',
                     help='Macrobatch updates to save memory')
+parser.add_argument('--get-timeline', action='store_true',
+                    help="Set to true if need to collect timeline data")
 
 best_prec1 = 0
 
+args = parser.parse_args()
 
 # Helper methods.
 def is_first_stage():
@@ -116,9 +119,9 @@ class SyntheticDataset(torch.utils.data.dataset.Dataset):
     def __len__(self):
         return self.length
 
+
 def main():
     global args, best_prec1
-    args = parser.parse_args()
 
     torch.cuda.set_device(args.local_rank)
 
@@ -349,6 +352,50 @@ def train(train_loader, r, optimizer, epoch):
     if args.verbose_frequency > 0:
         print("Letting in %d warm-up minibatches" % num_warmup_minibatches)
         print("Running training for %d minibatches" % n)
+
+    if args.get_timeline:
+        with torch.autograd.profiler.profile(use_cuda=True) as prof:
+            # start num_warmup_minibatches forward passes
+            for i in range(num_warmup_minibatches):
+                r.run_forward()
+
+            for i in range(n - num_warmup_minibatches):
+                # perform forward pass
+                r.run_forward()
+
+                # Adjust learning rate
+                adjust_learning_rate(optimizer, epoch, args.epochs, r, args.lr_policy, i, n)
+
+                if is_last_stage():
+                    # measure accuracy and record loss
+                    output, target, loss = r.output, r.target, r.loss
+                    prec1, prec5 = accuracy(output, target, topk=(1, 5))
+                    losses.update(loss.item(), output.size(0))
+                    top1.update(prec1[0], output.size(0))
+                    top5.update(prec5[0], output.size(0))
+
+                # perform backward pass
+                if args.fp16:
+                    r.zero_grad()
+                else:
+                    optimizer.zero_grad()
+                optimizer.load_old_params()
+                r.run_backward()
+                optimizer.load_new_params()
+                optimizer.step()
+
+            # finish remaining backward passes
+            for i in range(num_warmup_minibatches):
+                optimizer.zero_grad()
+                optimizer.load_old_params()
+                r.run_backward()
+                optimizer.load_new_params()
+                optimizer.step()
+
+        print("Rank {} logging down timeline".format(args.rank))
+        prof.function_events.export_chrome_trace('trace_{}.json'.format(args.rank))
+        return
+
 
     # start num_warmup_minibatches forward passes
     for i in range(num_warmup_minibatches):
