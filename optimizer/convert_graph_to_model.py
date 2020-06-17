@@ -119,8 +119,7 @@ def convert_subgraph_to_module(graph, full_graph, num_subgraphs, module_name, in
         layer_call = None
         layer_name = "self.layer%d" % counter
         output_name = "out%d" % counter
-        layer_declaration = "torch.nn.%s" % (
-            node.node_desc.replace("inplace", "inplace=True"))
+        layer_declaration = "torch.nn.%s" % node.node_desc
         layer_names[node.node_id] = layer_name
         if node.node_id not in output_names:
             output_names[node.node_id] = output_name
