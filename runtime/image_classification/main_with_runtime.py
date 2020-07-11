@@ -401,6 +401,8 @@ def train(train_loader, r, optimizer, epoch):
     for i in range(num_warmup_minibatches):
         r.run_forward()
 
+    t0 = time.time()
+
     for i in range(n - num_warmup_minibatches):
         # perform forward pass
         r.run_forward()
@@ -423,7 +425,8 @@ def train(train_loader, r, optimizer, epoch):
             full_epoch_time = (epoch_time / float(i+1)) * float(n)
 
             if i % args.print_freq == 0:
-                print('Epoch: [{0}][{1}/{2}]\t'
+                print('[{wall_time:.4f}]\t'
+                      'Epoch: [{0}][{1}/{2}]\t'
                       'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Epoch time [hr]: {epoch_time:.3f} ({full_epoch_time:.3f})\t'
                       'Memory: {memory:.3f} ({cached_memory:.3f})\t'
@@ -431,6 +434,7 @@ def train(train_loader, r, optimizer, epoch):
                       'Prec@1: {top1.val:.3f} ({top1.avg:.3f})\t'
                       'Prec@5: {top5.val:.3f} ({top5.avg:.3f})'.format(
                        epoch, i, n, batch_time=batch_time,
+                       wall_time=end - t0, 
                        epoch_time=epoch_time, full_epoch_time=full_epoch_time,
                        loss=losses, top1=top1, top5=top5,
                        memory=(float(torch.cuda.memory_allocated()) / 10**9),

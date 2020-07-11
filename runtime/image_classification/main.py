@@ -56,12 +56,16 @@ parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-s', '--synthetic_data', action='store_true',
                     help="Use synthetic data")
+parser.add_argument('--rank', type=int,
+                    help='rank of distributed processes')
 parser.add_argument('--world-size', default=1, type=int,
                     help='number of distributed processes')
 parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
                     help='url used to set up distributed training')
 parser.add_argument('--dist-backend', default='gloo', type=str,
                     help='distributed backend')
+parser.add_argument('--get-timeline', action='store_true',
+                    help="Set to true if need to collect timeline data")
 
 best_prec1 = 0
 args = parser.parse_args()
@@ -90,7 +94,7 @@ def main():
 
     if args.distributed:
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
-                                world_size=args.world_size)
+                                rank=args.rank, world_size=args.world_size)
 
     # create model
     module = importlib.import_module(args.module)
@@ -213,6 +217,42 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
     # switch to train mode
     model.train()
+
+    if args.get_timeline:
+        with torch.autograd.profiler.profile(use_cuda=True) as prof:
+            for i, (input, target) in enumerate(train_loader):
+                if args.num_minibatches is not None and i >= args.num_minibatches:
+                    break
+
+                target = target.cuda(non_blocking=True)
+
+                # compute output
+                output = model(input)
+                if isinstance(output, tuple):
+                    loss = sum((criterion(output_elem, target) for output_elem in output))
+                else:
+                    loss = criterion(output, target)
+
+                # measure accuracy and record loss
+                if isinstance(output, tuple):
+                    prec1, prec5 = accuracy(output[0], target, topk=(1, 5))
+                else:
+                    prec1, prec5 = accuracy(output, target, topk=(1, 5))
+                losses.update(loss.item(), input.size(0))
+                top1.update(prec1[0], input.size(0))
+                top5.update(prec5[0], input.size(0))
+
+                # compute gradient and do SGD step
+                optimizer.zero_grad()
+                with amp_handle.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+                optimizer.step()
+
+        # print("Rank {} logging down timeline".format(args.rank))
+        prof.function_events.export_chrome_trace('trace_baseline.json')
+        return
+
+
 
     end = time.time()
     epoch_start_time = time.time()

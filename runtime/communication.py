@@ -239,6 +239,8 @@ class CommunicationHandler(object):
             forward_num_iterations = 0
 
         if self.num_ranks_in_previous_stage > 0:
+            if backward_num_iterations % self.num_ranks_in_previous_stage != 0:
+                print('Backward num iter {}, self num {}'.format(backward_num_iterations, self.num_ranks_in_previous_stage ))
             assert backward_num_iterations % self.num_ranks_in_previous_stage == 0
             backward_num_iterations = backward_num_iterations // \
                 self.num_ranks_in_previous_stage
