@@ -662,6 +662,7 @@ class StageRuntime:
 
         TODO: don't currently support uneven configurations.
         """
+        loader_size = loader_size // self.num_ranks_in_first_stage * self.num_ranks_in_first_stage 
         if self.stage == 0 or self.stage is None:
             return loader_size
 
