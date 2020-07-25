@@ -48,7 +48,7 @@ class StageRuntime:
                  training_tensor_dtypes, inputs_module_destinations,
                  target_tensor_names, configuration_maps, master_addr,
                  rank, local_rank, num_ranks_in_server, verbose_freq,
-                 model_type, enable_recompute=False):
+                 model_type, enable_recompute=False, record=False):
         # Metadata needed for forward and backward pass within this stage.
         self.tensors = []
         self.gradients = {}
@@ -60,6 +60,10 @@ class StageRuntime:
         self.training_tensor_dtypes = training_tensor_dtypes
         self.model_type = model_type
         self.target_tensor_names = target_tensor_names
+
+        self.recorder = runtime_utilities.Recorder(record, rank)
+        self.fp_counter = 0
+        self.bp_counter = 0
 
         self.initialize(model, inputs_module_destinations, configuration_maps,
                         master_addr, rank, local_rank, num_ranks_in_server)
@@ -127,6 +131,7 @@ class StageRuntime:
             self.num_warmup_minibatches = 0
             self.comm_handler = None
         else:
+            print('{} {}'.format(len(module_to_stage_map), len(model)))
             assert len(module_to_stage_map) == len(model)
             assert self.rank is not None
 
@@ -489,12 +494,17 @@ class StageRuntime:
     def run_forward(self, recompute_step=False):
         """Run forward pass.
         """
+        self.fp_counter += 1
+
+        self.recorder.start_event()
         # Receive tensors from previous worker.
         self.receive_tensors_forward()
         tensors = self.tensors[-1]
 
+        self.recorder.end_event('fp wait')
         # Run forward pass.
         self._run_forward(tensors)
+        self.recorder.end_event('fp comp', args=dict(iteration=self.fp_counter))
 
         # Send tensors forward.
         self.send_tensors_forward()
@@ -502,6 +512,7 @@ class StageRuntime:
             self.forward_stats.print_stats()
         self.forward_stats.reset_stats()
         self.forward_minibatch_id += 1
+        self.recorder.end_event('fp post', args=dict(iteration=self.fp_counter))
 
     def _run_forward(self, tensors):
         # Perform forward pass through model (self.modules_with_dependencies already
@@ -547,8 +558,12 @@ class StageRuntime:
             self.loss = 1
 
     def run_backward(self):
+        self.bp_counter += 1
+
+        self.recorder.start_event()
         # Receive input gradients needed for backward pass.
         self.receive_tensors_backward()
+        self.recorder.end_event('bp wait')
         # Backward pass through modules in reverse order.
         inputs = {}
         outputs = {}
@@ -607,6 +622,8 @@ class StageRuntime:
         torch.autograd.backward(tuple([outputs[output_name] for output_name in outputs]),
                                 grad_tensors=tuple([output_gradients[output_name]
                                                     for output_name in outputs]))
+
+        self.recorder.end_event('bp comp', args=dict(iteration=self.bp_counter))
 
         # Input tensors don't need gradients.
         for input_name in inputs:

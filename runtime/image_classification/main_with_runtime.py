@@ -94,6 +94,8 @@ parser.add_argument('--macrobatch', action='store_true',
                     help='Macrobatch updates to save memory')
 parser.add_argument('--get-timeline', action='store_true',
                     help="Set to true if need to collect timeline data")
+parser.add_argument('--num_warmup_batches', default=0, type=int,
+                    help="number of warmup batches")
 
 best_prec1 = 0
 
@@ -191,7 +193,8 @@ def main():
         num_ranks_in_server=args.num_ranks_in_server,
         verbose_freq=args.verbose_frequency,
         model_type=runtime.IMAGE_CLASSIFICATION,
-        enable_recompute=args.recompute)
+        enable_recompute=args.recompute,
+        record=args.get_timeline)
 
     # stage needed to determine if current stage is the first stage
     # num_stages needed to determine if current stage is the last stage
@@ -205,10 +208,15 @@ def main():
     # define optimizer
     if args.no_input_pipelining:
         num_versions = 1
+    elif args.num_warmup_batches > 0:
+        num_versions = args.num_warmup_batches 
+        r.num_warmup_minibatches = num_versions
     else:
         # number of versions is the total number of machines following the current
         # stage, shared amongst all replicas in this stage
         num_versions = r.num_warmup_minibatches + 1
+
+    print('Num versions is {}'.format(num_versions))
 
     # if specified, resume from checkpoint
     if args.resume:
@@ -375,14 +383,22 @@ def train(train_loader, r, optimizer, epoch):
                     top5.update(prec5[0], output.size(0))
 
                 # perform backward pass
+                r.recorder.start_event()
                 if args.fp16:
                     r.zero_grad()
                 else:
                     optimizer.zero_grad()
                 optimizer.load_old_params()
+                r.recorder.end_event('bp reload old', args=dict(iteration=r.bp_counter + 1))
+
                 r.run_backward()
+
+                r.recorder.start_event()
                 optimizer.load_new_params()
+                r.recorder.end_event('bp reload new', args=dict(iteration=r.bp_counter))
+
                 optimizer.step()
+                r.recorder.end_event('optimize', args=dict(iteration=r.bp_counter))
 
             # finish remaining backward passes
             for i in range(num_warmup_minibatches):
@@ -394,6 +410,7 @@ def train(train_loader, r, optimizer, epoch):
 
         print("Rank {} logging down timeline".format(args.rank))
         prof.function_events.export_chrome_trace('trace_{}.json'.format(args.rank))
+        r.recorder.dump('timeline_{}.json'.format(args.rank))
         return
 
 
